@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerçekçi Hareketli Sis</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a1a1a;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="fogCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('fogCanvas');
+        const gl = canvas.getContext('webgl');
+
+        // Canvas boyutunu ayarla
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            gl.viewport(0, 0, canvas.width, canvas.height);
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // Vertex Shader
+        const vertexShaderSource = `
+            attribute vec2 position;
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+            }
+        `;
+
+        // Fragment Shader - Gerçekçi Sis
+        const fragmentShaderSource = `
+            precision highp float;
+            uniform vec2 resolution;
+            uniform float time;
+
+            // Perlin benzeri noise fonksiyonu
+            float hash(vec2 p) {
+                return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+            }
+
+            float noise(vec2 p) {
+                vec2 i = floor(p);
+                vec2 f = fract(p);
+                f = f * f * (3.0 - 2.0 * f);
+
+                float a = hash(i);
+                float b = hash(i + vec2(1.0, 0.0));
+                float c = hash(i + vec2(0.0, 1.0));
+                float d = hash(i + vec2(1.0, 1.0));
+
+                return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+            }
+
+            // Fractal Brownian Motion - Daha gerçekçi sis için
+            float fbm(vec2 p) {
+                float value = 0.0;
+                float amplitude = 0.5;
+                float frequency = 1.0;
+
+                for(int i = 0; i < 5; i++) {
+                    value += amplitude * noise(p * frequency);
+                    frequency *= 2.0;
+                    amplitude *= 0.5;
+                }
+
+                return value;
+            }
+
+            void main() {
+                vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+                // Farklı hızlarda hareket eden sis katmanları
+                vec2 fogUV1 = uv * 3.0 + vec2(time * 0.05, time * 0.03);
+                vec2 fogUV2 = uv * 2.0 - vec2(time * 0.03, time * 0.04);
+                vec2 fogUV3 = uv * 4.0 + vec2(time * 0.02, -time * 0.02);
+
+                // Üç katmanlı sis
+                float fog1 = fbm(fogUV1);
+                float fog2 = fbm(fogUV2);
+                float fog3 = fbm(fogUV3);
+
+                // Katmanları birleştir
+                float fogDensity = (fog1 * 0.5 + fog2 * 0.3 + fog3 * 0.2);
+
+                // Sin kullanarak zamanla yoğunluğu değiştir
+                float timeModulation = sin(time * 0.5) * 0.3 + 0.7; // 0.4 ile 1.0 arası
+                fogDensity *= timeModulation;
+
+                // Yukarıdan aşağıya doğru sis yoğunluğunu artır
+                float heightGradient = 1.0 - uv.y * 0.3;
+                fogDensity *= heightGradient;
+
+                // Gri tonları
+                vec3 fogColor = vec3(0.6, 0.65, 0.7); // Hafif mavi tonlu gri
+                vec3 darkColor = vec3(0.1, 0.1, 0.12); // Koyu arka plan
+
+                // Sis yoğunluğuna göre renk karıştır
+                vec3 finalColor = mix(darkColor, fogColor, smoothstep(0.3, 0.7, fogDensity));
+
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        `;
+
+        // Shader'ları derle
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader derleme hatası:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+
+            return shader;
+        }
+
+        const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+        const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+
+        // Program oluştur
+        const program = gl.createProgram();
+        gl.attachShader(program, vertexShader);
+        gl.attachShader(program, fragmentShader);
+        gl.linkProgram(program);
+
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            console.error('Program bağlama hatası:', gl.getProgramInfoLog(program));
+        }
+
+        gl.useProgram(program);
+
+        // Tam ekran quad
+        const positions = new Float32Array([
+            -1, -1,
+             1, -1,
+            -1,  1,
+             1,  1
+        ]);
+
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+        const positionLocation = gl.getAttribLocation(program, 'position');
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+        // Uniform'ları al
+        const resolutionLocation = gl.getUniformLocation(program, 'resolution');
+        const timeLocation = gl.getUniformLocation(program, 'time');
+
+        // Animasyon döngüsü
+        let startTime = Date.now();
+
+        function render() {
+            const currentTime = (Date.now() - startTime) / 1000.0;
+
+            gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+            gl.uniform1f(timeLocation, currentTime);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            requestAnimationFrame(render);
+        }
+
+        render();
+    </script>
+</body>
+</html>
